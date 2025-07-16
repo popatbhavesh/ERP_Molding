@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Order Entry</title>
+  <style>
+    body { font-family: Arial; max-width:800px; margin:50px auto; }
+    .row { display:flex; gap:10px; margin-bottom:15px; }
+    input, select, button { flex:1; padding:8px; }
+    table { width:100%; border-collapse:collapse; margin-top:15px; }
+    th, td { border:1px solid #ccc; padding:8px; text-align:center;}
+    th { background:#f0f0f0; }
+    .action-btn { margin-right:10px;}
+  </style>
+</head>
+<body>
+  <h1>🧾 Order Entry</h1>
+  <div class="row">
+    <input id="orderNo" readonly placeholder="Order No">
+    <input id="orderDate" type="date">
+  </div>
+  <div class="row">
+    <select id="partyName"></select>
+    <select id="orderList"></select>
+    <button onclick="loadOrder()">🔍 Load</button>
+  </div>
+  <table>
+    <thead><tr><th>Product</th><th>Color</th><th>Grade</th><th>Qty</th><th>MRP</th><th>Amt</th><th>Del</th></tr></thead>
+    <tbody id="productBody"></tbody>
+  </table>
+  <button onclick="addRow()">➕ Add Item</button>
+  <div class="row">
+    <button onclick="submitOrder()">✅ Submit</button>
+    <button onclick="newOrder()">🆕 New</button>
+    <button onclick="exportPdf()">📄 PDF</button>
+  </div>
+  <p id="msg"></p>
+
+<script>
+const api = 'https://script.google.com/macros/s/AKfycbyAAS0Hc6l7H6L91GsthAeQb7DOdylqpVpKOEpia9GybGSTPBY16-WvBsxn5sjUu-g/exec';
+
+async function apiCall(action, data = null) {
+  try {
+    const method = data ? 'POST' : 'GET';
+    const url = api + '?action=' + action;
+    const options = {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+    };
+    if (data) {
+      options.body = JSON.stringify(data);
+    }
+
+    const res = await fetch(url, options);
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+    }
+
+    const json = await res.json();
+
+    if (json.error) {
+      throw new Error(json.error);
+    }
+
+    return json;
+  } catch (err) {
+    console.error('❌ API Call Failed:', err.message || err);
+    throw err; // Rethrow to trigger caller's error handler
+  }
+}
+
+
+let productData=[], currentOrder;
+
+async function init() {
+  try {
+    const data = await apiCall('getInitialData');
+    productData = data.products;
+    fill('partyName', data.parties);
+    fill('orderList', data.existingOrders);
+    orderNo.value = data.orderNo;
+    orderDate.valueAsDate = new Date();
+    addRow();
+  } catch (err) {
+    alert('❌ Failed to load initial data: ' + err.message);
+  }
+}
+
+init();
+
+function fill(id, a){ document.getElementById(id).innerHTML= '<option>--</option>'+a.map(v=>`<option>${v}</option>`).join(''); }
+
+function addRow(item={}) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><select></select></td><td><select></select></td><td><select></select></td>
+  <td><input type="number" value="${item.qty||''}"></td><td><input type="number" readonly value="${item.mrp||''}"></td><td><input type="number" readonly value="${item.amount||''}"></td><td><button onclick="this.closest('tr').remove();calc();">❌</button></td>`;
+  productBody.appendChild(tr);
+  setupRow(tr,item);
+  calc();
+}
+
+function setupRow(tr,item) {
+  const [prod,color,grade,qty,mrp,amt] = tr.querySelectorAll('td select, td input');
+  const names = [...new Set(productData.map(p=>p.name))];
+  prod.innerHTML = names.map(v=>`<option ${v===item.product?'selected':''}>${v}</option>`).join('<option>');
+  if(item.product) prod.dispatchEvent(new Event('change'));
+  prod.onchange = () => {
+    color.innerHTML = [...new Set(productData.filter(p=>p.name===prod.value).map(p=>p.color))].map(v=>`<option>${v}</option>`).join('');
+    grade.innerHTML='';
+    mrp.value=amt.value='';
+    calc();
+  };
+  color.onchange = () => {
+    grade.innerHTML = [...new Set(productData.filter(p=>p.name===prod.value&&p.color===color.value).map(p=>p.grade))].map(v=>`<option>${v}</option>`).join('');
+    mrp.value=amt.value='';
+    calc();
+  };
+  grade.onchange = () => {
+    const m = productData.find(p=>p.name===prod.value&&p.color===color.value&&p.grade===grade.value);
+    if(m) { mrp.value=m.mrp; qty.oninput(); }
+  };
+  qty.oninput = () => {
+    const q=+qty.value||0, m=+mrp.value||0;
+    amt.value=(q*m).toFixed(2); calc();
+  };
+  // prefill
+  if(item.product) prod.value=item.product;
+  if(item.color) color.value=item.color;
+  if(item.grade) grade.value=item.grade;
+}
+
+function calc(){
+  let tq=0, ta=0;
+  productBody.querySelectorAll('tr').forEach(tr=>{
+    const q=+tr.cells[3].firstChild.value||0;
+    const a=+tr.cells[5].firstChild.value||0;
+    tq+=q; ta+=a;
+  });
+  document.getElementById('msg').textContent=`Total Qty: ${tq}, Total: ₹${ta.toFixed(2)}`;
+}
+
+async function submitOrder() {
+  const payload = {
+    orderNo:orderNo.value,orderDate:orderDate.value,partyName:partyName.value,
+    products: [...productBody.querySelectorAll('tr')].map(tr=>({
+      product:tr.cells[0].firstChild.value,
+      color:tr.cells[1].firstChild.value,
+      grade:tr.cells[2].firstChild.value,
+      qty:+tr.cells[3].firstChild.value||0,
+      mrp:+tr.cells[4].firstChild.value||0,
+      amount:+tr.cells[5].firstChild.value||0
+    }))
+  };
+  const fn = currentOrder === payload.orderNo ? 'updateOrder':'saveOrder';
+  await apiCall(fn,payload);
+  msg.textContent = '✔️ Order saved!';
+}
+
+async function loadOrder(){
+  const d = await apiCall('getOrderByNumber',{orderNo:orderList.value});
+  currentOrder = d.orderNo;
+  orderNo.value=d.orderNo;
+  orderDate.value=d.orderDate;
+  partyName.value=d.partyName;
+  productBody.innerHTML='';
+  d.products.forEach(addRow);
+  calc();
+}
+
+function exportPdf(){
+  const url = api + '?action=createOrderPdf&orderNo=' + orderNo.value;
+  window.open(url,'_blank');
+}
+</script>
+</body>
+</html>
